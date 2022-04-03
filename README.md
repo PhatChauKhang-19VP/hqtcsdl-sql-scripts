@@ -4,5 +4,6 @@
 
 1. database.sql
 2. ProcedureList.sql
-3. test_usp.sql (optional) => for testing
-4. privilege.sql (DONNOT RUN)
+3. privilege.sql
+4. test_usp.sql
+

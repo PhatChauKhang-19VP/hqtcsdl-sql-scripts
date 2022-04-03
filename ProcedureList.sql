@@ -2,16 +2,31 @@
 go
 
 /* ___________________ APP USP ___________________ */
+create function dbo.fn_check_is_account_is_active(@username varchar(50))
+returns varchar(10)
+as
+begin	
+	if exists (select role from dbo.LOGIN_INFOS as li
+				where li.username=@username
+					and li.status = 'ACTIVE')
+		return 'True'
+	return 'False'
+end
+go
+	
 create function dbo.fn_app_log_in(@username varchar(50), @password varchar(128)) returns varchar(20)
 as
 begin
-	if exists (select role from dbo.LOGIN_INFOS where username=@username and password=@password)
+	if exists (select role from dbo.LOGIN_INFOS as li
+				where li.username=@username
+					and li.password=@password
+					and dbo.fn_check_is_account_is_active(@username) = 'True')
 		return (select role from dbo.LOGIN_INFOS where username=@username and password=@password)
 	return 'LOGIN_FAILED'
 end
 go
 
-/* ___________________ ĐỐI TÁC USP ___________________ */
+/*========================= ĐỐI TÁC USP ==================*/
 select dbo.fn_app_log_in('partner1', '1')
 go
 
@@ -106,7 +121,7 @@ end
 go
 
 -- đối tác lập/gia hạn hợp đồng with time
-create proc dbo.usp_partner_create_contract_with_start_time
+create proc dbo.usp_partner_register_contract_with_start_time
 	@CID varchar(20),
 	@username varchar(50),
 	@TIN varchar(20),
@@ -228,7 +243,7 @@ create proc dbo.usp_partner_add_product
 	@price float
 as begin
 	begin try
-		begin tran
+		begin tran			
 			insert into dbo.PRODUCTS(PID, product_type, username, img_src, name, description, price, is_deleted)
 				values (@PID, @product_type, @username, @img_src, @name, @description, @price, 0)
 		commit tran
@@ -311,8 +326,31 @@ create proc dbo.usp_partner_add_product_to_branch
 as begin
 	begin try
 		begin tran
-			insert into dbo.PRODUCT_IN_BRANCHES (PBID,PID, stock, is_deleted)
-				values (@PBID, @PID, @stock, 0)
+			-- check if producst existed in branch
+			if exists (select * from dbo.PRODUCT_IN_BRANCHES as pib where pib.PID = @PID and pib.PBID = @PBID and pib.is_deleted = 0)
+				begin
+					declare @curr_stock int = (select pib.stock from dbo.PRODUCT_IN_BRANCHES as pib where pib.PID = @PID and pib.PBID = @PBID and pib.is_deleted = 0)
+
+					update dbo.PRODUCT_IN_BRANCHES
+						set stock = @curr_stock + @stock
+						where PBID = @PBID and PID = @PID
+				end
+			else 
+				begin
+					if exists (select * from dbo.PRODUCT_IN_BRANCHES as pib where pib.PID = @PID and pib.PBID = @PBID and pib.is_deleted = 1)
+						and exists (select * from dbo.PRODUCTS as p where p.PID = @PID and p.is_deleted = 0)
+						begin							
+							update dbo.PRODUCT_IN_BRANCHES
+								set stock = @stock,
+								is_deleted = 0
+								where PBID = @PBID and PID = @PID
+						end
+					else
+						begin
+							insert into dbo.PRODUCT_IN_BRANCHES (PBID,PID, stock, is_deleted)
+							values (@PBID, @PID, @stock, 0)
+						end
+				end			
 		commit tran
 	end try
 	begin catch
@@ -346,10 +384,10 @@ as begin
 end
 go
 
--- đối tác xem đơn hàng của mình, todo: group by chi nhánh
+-- đối tác xem đơn hàng của mình
 create proc dbo.usp_partner_get_orders
-	@partner_username varchar(20)
-as begin
+	@partner_username varchar(50)
+as begins
 	select o.*, p.username 
 		from dbo.ORDERS as o
 			join dbo.PARTNERS as p on p.username = o.partner_username
@@ -358,15 +396,17 @@ end
 go
 
 -- đối tác/tài xế cập nhật tình trạng vận chuyển đơn hàng
-create proc usp_partner_or_driver_update_delivery_status
+create proc dbo.usp_partner_or_driver_update_delivery_status
 	@order_id varchar(20),
 	@new_delivery_status varchar(20)
 as begin
 	begin try
 		begin tran
+			if not exists (select * from dbo.ORDERS as o where o.order_id = @order_id)
+				throw 52000, 'Invalid order_id', 1
 			update dbo.ORDERS
 				set delivery_status = @new_delivery_status
-			where order_id = @order_id
+				where order_id = order_id
 		commit tran
 	end try
 	begin catch
@@ -556,7 +596,7 @@ create proc dbo.usp_customer_pay_order
 as begin
 	begin try
 		begin tran
-			if (select paid_status from ORDERS where order_id=@order_id) = 'NOTPAID'
+			if (select paid_status from ORDERS where order_id=@order_id) = 'UNPAID'
 				begin
 					update ORDERS
 						set paid_status='PAID'
@@ -607,15 +647,15 @@ as begin
 			insert into dbo.LOGIN_INFOS
 				values (@username, @password, 'DRIVER', 'PENDING')
 
-			-- insert into DRIVER_REGISTRATIONS
-			insert into dbo.DRIVER_REGISTRATIONS (username, VIN, fee, registration_status, paid_fee_status)
-				values (@username, @VIN, 100, 'PENDING', 'UNPAID')
-
 			-- insert into DRIVERS
 			insert into dbo.DRIVERS(username, name, NIN, address_province_code, address_district_code, address_ward_code, address_line, active_area_district_code, mail, BID)
 			values 
 				(@username, @name, @NIN, @address_province_code, @address_district_code, @address_ward_code, @address_line, @active_area_district_code, @mail, @BID)
-		commit tran
+		
+			-- insert into DRIVER_REGISTRATIONS
+			insert into dbo.DRIVER_REGISTRATIONS (username, VIN, fee, registration_status, paid_fee_status)
+				values (@username, @VIN, 100, 'PENDING', 'UNPAID')
+			commit tran
 	end try
 	begin catch
 		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
@@ -762,7 +802,7 @@ create proc dbo.usp_employee_accept_contract
 as begin
 	begin try
 		begin tran
-			-- check if 
+			-- todo
 		commit tran
 	end try
 	begin catch
@@ -775,7 +815,7 @@ as begin
 end
 go
 
--- Nhân viên kích hoạt tài khoảng 1 partner
+-- Nhân viên duyệt đăng kí tài khoảng 1 partner
 create proc dbo.usp_employee_active_partner_account
 	@partner_username varchar(50)
 as begin
@@ -909,30 +949,64 @@ end
 go
 
 /* ___________________ QUẢN TRỊ USP ___________________ */
+go
 
 /* ----- quản trị người dùng ----- */
-
--- Admin cập nhật thông tin tài khoản <- kích hoạt/ khóa tài khoảng
-create proc dbo.usp_admin_update_login_info
---	@username varchar(50)
---	@new_status
-as
-begin
-	print 'cap nhat thong tin nguoi dung'
-end
-go
 
 -- Admin thêm tài khoản Admin
 create proc dbo.usp_admin_add_admin_account
 	@username varchar(50),
-	@password varchar(512),
-	@name nvarchar(50)
-as
-begin
-	insert into dbo.LOGIN_INFOS 
-		values (@username, @password, 'ADMIN', 'ACTIVE')
-	insert into dbo.ADMINS
-		values (@username, @name)
+	@password varchar(128),
+	@name nvarchar(255)
+as begin
+	begin try
+		begin tran
+			insert into dbo.LOGIN_INFOS 
+				values (@username, @password, 'ADMIN', 'ACTIVE')
+			insert into dbo.ADMINS
+				values (@username, @name)
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
+-- Admin xóa tài khoảng admin
+create proc dbo.usp_admin_delete_admin_account
+	@username_to_delete varchar(50)
+as begin
+	begin try
+		begin tran
+			-- check if that account is exist and is an admin account
+			if exists (	select * from dbo.LOGIN_INFOS as li
+							join dbo.ADMINS as a on li.username = a.username
+							where li.username = @username_to_delete and li.role = 'ADMIN')
+				begin
+					-- delete record in ADMINS
+					delete dbo.ADMINS
+						where username = @username_to_delete
+
+					-- delete record in LOGIN_INFOS
+					delete dbo.LOGIN_INFOS
+						where username = @username_to_delete			
+				end
+			else 
+				throw 52000, 'Invalid username. Cannot delete admin', 1
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+		select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+		raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+		if (@@TRANCOUNT > 0)
+			rollback tran
+	end catch
 end
 go
 
@@ -942,17 +1016,80 @@ create proc dbo.usp_admin_add_employee_account
 	@password varchar(512),
 	@name nvarchar(50),
 	@mail varchar(50)
-as
-begin
-	insert into dbo.LOGIN_INFOS 
-		values (@username, @password, 'EMPLOYEE', 'ACTIVE')
-	insert into dbo.EMPLOYEES
-		values (@username, @name, @mail)
+as begin
+	begin try
+		begin tran
+			insert into dbo.LOGIN_INFOS 
+				values (@username, @password, 'EMPLOYEE', 'ACTIVE')
+			insert into dbo.EMPLOYEES
+				values (@username, @name, @mail)
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
 end
 go
 
-/* ----- quản trị quyền người dùng ----- */
--- create proc dbo.usp_admin_change_role
-	
+-- Admin xóa tài khoảng nhân viên
+create proc dbo.usp_admin_delete_employee_account
+	@username_to_delete varchar(50)
+as begin
+	begin try
+		begin tran
+			-- check if that account is exist and is an Employee account
+			if exists (	select * from dbo.LOGIN_INFOS as li
+							join dbo.EMPLOYEES as a on li.username = a.username
+							where li.username = @username_to_delete and li.role = 'EMPLOYEE')
+				begin
+					-- delete record in ADMINS
+					delete dbo.EMPLOYEES
+						where username = @username_to_delete
 
--- TODO: admin cấp quyền thao tác trên dữ liệu
+					-- delete record in LOGIN_INFOS
+					delete dbo.LOGIN_INFOS
+						where username = @username_to_delete			
+				end
+			else 
+				throw 52000, 'Invalid username. Cannot delete admin', 1
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+		select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+		raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+		if (@@TRANCOUNT > 0)
+			rollback tran
+	end catch
+end
+go
+
+-- ADMIN khóa/kích hoạt tài khoản
+create proc dbo.usp_admin_change_account_status
+	@username_to_change varchar(50),
+	@new_status varchar(20)
+as begin
+	begin try
+		begin tran
+			-- Kiểm tra tài khoảng có tồn tại hay không
+			if exists (select * from dbo.LOGIN_INFOS as li where li.username = @username_to_change)
+				update dbo.LOGIN_INFOS
+					set status = @new_status
+					where username = @username_to_change
+			else
+				throw 52000, 'Invalid username !!!', 1
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go

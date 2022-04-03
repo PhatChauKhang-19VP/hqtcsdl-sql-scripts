@@ -85,7 +85,7 @@ create table  dbo.LOGIN_INFOS (
 	status varchar(20) not null, -- pending, active, inactive
 
 	constraint login_infos_pkey primary key (username),
-	constraint login_infos_chk_valid_role check (role in ('PARTNER', 'ADMIN', 'CUSTOMER', 'EMPLOYER', 'DRIVER'))
+	constraint login_infos_chk_valid_role check (role in ('PARTNER', 'ADMIN', 'CUSTOMER', 'EMPLOYEE', 'DRIVER'))
 );
 go 
 

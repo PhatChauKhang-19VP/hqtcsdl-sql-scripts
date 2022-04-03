@@ -1,7 +1,7 @@
 ﻿use db_19vp_delivery
 go
 
--- exec as user = '_app'
+exec as user = '_app'
 
 -- test đăng nhập
 select dbo.fn_app_log_in('phatnm.partner1', 'pn12345') as role
@@ -10,7 +10,7 @@ go
 revert
 go
 
--- EXECUTE AS USER = '_partner';
+exec as user = '_partner';
 -- test đối tác đăng kí thông tin
 go
 
@@ -30,13 +30,6 @@ exec dbo.usp_partner_registation
 	@mail = 'nmphat.partner3@mail.com';
 go
 
--- test đăng nhập
-select dbo.fn_app_log_in('phatnm.partner1', 'pn12345')
-go
-
-select * from dbo.LOGIN_INFOS
-go
-
 -- test đối tác lập hợp đồng
 exec dbo.usp_partner_register_contract
 	@CID = 'CID003',
@@ -46,21 +39,13 @@ exec dbo.usp_partner_register_contract
 	@commission = 0.7
 go
 
-exec dbo.usp_partner_create_contract_with_start_time
+exec dbo.usp_partner_register_contract_with_start_time
 	@CID = 'CID007',
 	@username = 'phatnm.partner1',
 	@TIN = '01234567890123456789',
 	@start_at = '2024-09-11',
 	@contract_time = 6,
 	@commission = 0.7
-go
-
----- Xem toàn bộ các hợp đồng đã lập
-select c.* from dbo.CONTRACTS as c
-	order by c.extension desc
-
--- đối tác xem hợp đồng hiện tại / accepted
-exec dbo.usp_partner_get_accepted_contracts 'phatnm.partner1'
 go
 
 -- đối tác xem hợp đồng hết hạn MÀ CHƯA ĐƯỢC GIA HẠN
@@ -105,18 +90,19 @@ exec dbo.usp_partner_add_branch
 	@address_line = N'123 nhà vàng 00040'
 go
 
-select * from dbo.PARTNER_BRANCHES
-go
-
 -- test đối tác thêm sản phẩm
 exec dbo.usp_partner_add_product 'PID001', 'FOOD', 'phatnm.partner1', 'img_src', N'Bánh oishi', N'Bánh oishi cay nồng', 5
 exec dbo.usp_partner_add_product 'PID003', 'FOOD', 'phatnm.partner1', 'img_src', N'Bánh bông lan', N'Bánh bông lan nhân trứng muối', 5
 go
 
+-- đối tác xóa sản phẩm
+exec dbo.usp_partner_delete_product
+	@PID = 'PID001'
+go
 -- test đối tác thêm sản phẩm vào chi nhánh phân phối
 exec dbo.usp_partner_add_product_to_branch
-	@PID = 'PID001',
 	@PBID = 'PBID001',
+	@PID = 'PID001',
 	@stock = 100
 go
 
@@ -129,17 +115,23 @@ go
 exec dbo.usp_partner_add_product_to_branch
 	@PID = 'PID001',
 	@PBID = 'PBID002',
-	@stock = 77
+	@stock = 78910
 go
 
 exec dbo.usp_partner_add_product_to_branch
 	@PID = 'PID003',
 	@PBID = 'PBID002',
-	@stock = 100
+	@stock = 1234
 go
 
 -- đối tác sửa thông tin sản phẩm
 exec dbo.usp_partner_update_product 'PID001', 'FOOD', 'phatnm.partner1', 'img_src', N'Bánh oishi ngon ngon', N'Bánh oishi cay nồng', 6
+go
+
+-- đối tác xóa sản phẩm khỏi chi nhánh phân phối
+exec dbo.usp_partner_delete_product_from_branch
+	@PID = 'PID001',
+	@PBID = 'PBID002'
 go
 
 -- đối tác xóa sản phẩm
@@ -148,8 +140,11 @@ go
 
 revert
 go
+--====================== CUSTOMER =====================--
 
--- exec as user = '_customer'
+exec as user = '_customer'
+go
+
 -- test khách hàng đăng kí
 exec dbo.usp_customer_registration
 	@username = 'phatnm.customer2',
@@ -172,10 +167,8 @@ go
 */
 exec dbo.usp_customer_create_order 'ORDER001', 'phatnm.partner1', 'phatnm.customer2', 'CASH'
 go
-
-revert
+exec dbo.usp_customer_create_order 'ORDER002', 'phatnm.partner1', 'phatnm.customer2', 'CASH'
 go
-
 -- test KHÁCH HÀNG Thêm/bớt sản phẩm ~ đơn hàng
 exec dbo.usp_customer_add_product_to_order 'ORDER001', 'PID001', 'PBID001', 10
 go
@@ -186,7 +179,29 @@ go
 exec dbo.usp_customer_pay_order 'ORDER001'
 go
 
--- exec as user = '_driver'
+revert
+go
+
+--====================== PARTNER =====================--
+
+-- đối tác xem đơn hàng của mình
+exec as user = '_partner'
+go
+
+exec dbo.usp_partner_get_orders 'phatnm.partner1'
+go
+
+-- đối tác/tài xế cập nhật tình trạng vận chuyển đơn hàng
+exec dbo.usp_partner_or_driver_update_delivery_status
+	'ORDER001', 'DELIVERING'
+go
+
+revert
+go
+
+--========================= DRIVER =====================--
+
+exec as user = '_driver'
 go
 
 -- Test tài xế đăng kí tài khoản
@@ -204,7 +219,8 @@ exec dbo.usp_driver_registration
 	@mail = 'nmphat.partner3@mail.com',
 	@BID = 'BID001',
 	@bank_name = N'Ngân hàng agribank',
-	@bank_branch = N'Quận 7'
+	@bank_branch = N'Quận 7',
+	@VIN = '66N19999'
 go
 
 ---- Tài xế 2
@@ -221,15 +237,16 @@ exec dbo.usp_driver_registration
 	@mail = 'nmphat.partner3@mail.com',
 	@BID = 'BID002',
 	@bank_name = N'Ngân hàng agribank',
-	@bank_branch = N'Quận 7'
+	@bank_branch = N'Quận 7',
+	@VIN = '66N20000'
 go
 
--- Test Tài xế 2 xem đơn hàng trong khu vực đăng kí
+-- Test Tài xế 2 xem đơn hàng (PENDING) trong khu vực đăng kí
 exec dbo.usp_driver_get_orders_in_active_area 'phatnm.driver2'
 go
 
 -- Test Tài xế tiếp nhận đơn hàng
-exec dbo.usp_driver_receive_order 'phatnm.driver2', 'ORDER001'
+exec dbo.usp_driver_receive_order 'phatnm.driver2', 'ORDER002'
 go
 
 -- Test Tài xế theo dõi thu nhập
@@ -239,7 +256,11 @@ go
 revert
 go
 
--- exec as user = '_employee'
+--==================== EMPLOYEE ==============--
+
+exec as user = '_employee'
+go
+
 -- Test Nhân viên duyệt tất cả hợp đồng
 declare @number_contracts int
 exec dbo.usp_employee_accept_all_contracts 
@@ -269,3 +290,46 @@ go
 
 revert
 go
+
+--================== ADMIN =================--
+
+exec as user = '_admin'
+go
+
+-- Admin thêm tài khoản Admin
+exec dbo.usp_admin_add_admin_account 
+	@username = 'nmphat.admin001',
+	@password = '1',
+	@name = N'Ngô Minh Phát admin vui vẻ'
+
+exec dbo.usp_admin_add_admin_account 
+	@username = 'nmphat.admin002',
+	@password = '1',
+	@name = N'Ngô Minh Phát admin buồn bã'
+go
+
+-- Admin thêm tài khoản Employee
+exec dbo.usp_admin_add_employee_account 
+	@username = 'nmphat.employee001',
+	@password = '1',
+	@name = N'Ngô Minh Phát admin vui vẻ',
+	@mail = N'phat@123.com'
+go
+
+exec dbo.usp_admin_add_employee_account 
+	@username = 'nmphat.employee002',
+	@password = '1',
+	@name = N'Ngô Minh Phát admin tâm trạng',
+	@mail = N'phat@123.com'
+go
+
+-- ADMIN xóa tài khoảng admin
+exec dbo.usp_admin_delete_admin_account 'nmphat.admin002'
+
+-- ADMIN xóa tài khoảng employee
+exec dbo.usp_admin_delete_employee_account 'nmphat.employee002'
+
+-- ADMIN khóa/kích hoạt tài khoản
+exec dbo.usp_admin_change_account_status
+	@username_to_change = 'nmphat.employee001',
+	@new_status = 'INACTIVE'
