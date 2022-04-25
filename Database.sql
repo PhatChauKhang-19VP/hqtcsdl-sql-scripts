@@ -159,6 +159,7 @@ go
 
 create table dbo.PRODUCT_TYPES (
 	product_type nvarchar(255) not null,
+	name_vi nvarchar(255) not null
 
 	constraint product_types_pkey primary key (product_type)
 )
@@ -209,6 +210,58 @@ create table dbo.CUSTOMERS (
 )
 go
 
+
+create function dbo.get_product_price(@PID varchar(20)) returns float
+begin
+	return (select price from dbo.PRODUCTS where PID = @PID)
+end
+go
+
+-- CART
+
+create table dbo.CARTS (
+	partner_username varchar(50) not null,
+	customer_username varchar(50) not null,
+	shipping_fee float not null,
+
+	constraint carts_pkey primary key (partner_username, customer_username),
+	constraint carts_fkey_to_partners foreign key (partner_username) references PARTNERS(username),
+	constraint carts_fkey_to_customers foreign key (customer_username) references dbo.CUSTOMERS(username),
+	constraint carts_chk_valid_shipping_fee check (shipping_fee >= 0)
+)
+go
+
+create table dbo.CARTS_DETAILS (
+	partner_username varchar(50) not null,
+	customer_username varchar(50) not null,
+	PID varchar(20) not null,
+	PBID varchar(20) not null,
+	price_per_product as (dbo.get_product_price(PID)),
+	quantity int not null,
+	sub_total as (dbo.get_product_price(PID)*quantity),
+
+	constraint carts_details_pkey primary key (partner_username, customer_username, PID, PBID),
+	constraint carts_details_fkey_carts foreign key (partner_username, customer_username) references dbo.CARTS(partner_username, customer_username),
+	constraint carts_datails_fkey_to_product_in_branches  foreign key (PBID, PID) references dbo.PRODUCT_IN_BRANCHES (PBID, PID),
+	constraint carts_details_chk_valid_quantity check (quantity >= 1))
+go
+
+create function dbo.fn_cal_cart_total(@partner_username varchar(50), @customer_username varchar(50)) 
+returns float
+as begin
+	declare @shipping_fee float = (select shipping_fee from dbo.CARTS as c where partner_username = @partner_username and customer_username = @customer_username)
+	if not exists (select * from dbo.CARTS_DETAILS where partner_username = @partner_username and customer_username = @customer_username)
+		return @shipping_fee
+	return @shipping_fee + (select sum(sub_total) from dbo.CARTS_DETAILS as cd where partner_username = @partner_username and customer_username = @customer_username)
+end
+go
+
+alter table dbo.CARTS
+	add total as (dbo.fn_cal_cart_total(partner_username, customer_username))
+go
+
+-- ORDERS
+
 create table dbo.ORDERS (
 	order_id varchar(20) not null,
 	partner_username varchar(50) not null,
@@ -242,12 +295,6 @@ alter table dbo.ORDERS
 	add total as (dbo.fn_cal_order_total([order_id]))
 go
 
-create function dbo.get_product_price(@PID varchar(20)) returns float
-begin
-	return (select price from dbo.PRODUCTS where PID = @PID)
-end
-go
-
 create table dbo.ORDERS_DETAILS (
 	order_id varchar(20) not null,
 	PID varchar(20) not null,
@@ -258,8 +305,7 @@ create table dbo.ORDERS_DETAILS (
 
 	constraint orders_details_pkey primary key (order_id, PID),
 	constraint orders_details_fkey_orders foreign key (order_id) references dbo.ORDERS(order_id),
-	constraint orders_details_fkey_products foreign key (PID) references dbo.PRODUCTS(PID),
-	constraint orders_details_fkey_partner_branches foreign key (PBID) references dbo.PARTNER_BRANCHES(PBID),
+	constraint orders_datails_fkey_to_product_in_branches  foreign key (PBID, PID) references dbo.PRODUCT_IN_BRANCHES (PBID, PID),
 	constraint orders_details_chk_valid_quantity check (quantity >= 1))
 go
 
@@ -345,12 +391,6 @@ alter table dbo.PARTNERS
 		or phone like '09[0-46-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
 	)		
 go
-
--- FIRST INIT WITH 2 PRODUCT_TYPES
-insert into dbo.PRODUCT_TYPES
-values
-	('FOOD'),
-	('DRINK');
 
 ---- IMPORT DATA ----
 
@@ -12867,4 +12907,270 @@ INSERT INTO dbo.WARDS (code,name,name_en,full_name,full_name_en,code_name,distri
 	 ('32244',N'Rạch Gốc',N'Rach Goc',N'Thị trấn Rạch Gốc',N'Rach Goc Township',N'rach_goc',N'973'),
 	 ('32245',N'Tân Ân',N'Tan An',N'Xã Tân Ân',N'Tan An Commune',N'tan_an',N'973'),
 	 ('32248',N'Đất Mũi',N'Dat Mui',N'Xã Đất Mũi',N'Dat Mui Commune',N'dat_mui',N'973');
+go
+
+-- Tạo các loại sản phẩm
+insert into dbo.PRODUCT_TYPES
+	values
+		('FOOD', N'Thực phẩm'),
+		('MEDICAL', N'Y tế'),
+		('DRINK', N'Nước uống'),
+		('FRUIT', N'Trái cây')
+go
+
+-- tạo 3 partner
+exec dbo.usp_partner_registation
+	@username = 'partner_food',
+	@password = '123456789',
+	@name = N'Thực phẩm sạch',
+	@representative_name = N'Ngô Minh Phát',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00001',
+	@address_line = N'123 Đồng Khởi',
+	@branch_number = 2,
+	@order_number = 100,
+	@product_type = 'FOOD',
+	@phone = '0704921213',
+	@mail = 'partner@food.com';
+go
+
+exec dbo.usp_partner_register_contract
+	@CID = 'CID001',
+	@username = 'partner_food',
+	@TIN = '01234567890123456789',
+	@contract_time = 6,
+	@commission = 0.1
+go
+
+exec dbo.usp_partner_registation
+	@username = 'partner_drink',
+	@password = '123456789',
+	@name = N'Thức uống ngon',
+	@representative_name = N'Phạm Vĩnh Khang',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00001',
+	@address_line = N'456 Đồng Đội',
+	@branch_number = 3,
+	@order_number = 100,
+	@product_type = 'DRINK',
+	@phone = '0987654321',
+	@mail = 'partner@drink.com';
+go
+
+exec dbo.usp_partner_register_contract
+	@CID = 'CID002',
+	@username = 'partner_drink',
+	@TIN = '01234567890123456789',
+	@contract_time = 6,
+	@commission = 0.1
+go
+
+exec dbo.usp_partner_registation
+	@username = 'partner_medical',
+	@password = '123456789',
+	@name = N'Dụng cụ y tế',
+	@representative_name = N'Hồ Ngọc Minh Châu',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00001',
+	@address_line = N'789 Đồng Xu',
+	@branch_number = 3,
+	@order_number = 100,
+	@product_type = 'MEDICAL',
+	@phone = '0987654321',
+	@mail = 'partner@medical.com';
+go
+
+exec dbo.usp_partner_register_contract
+	@CID = 'CID004',
+	@username = 'partner_medical',
+	@TIN = '01234567890123456789',
+	@contract_time = 3,
+	@commission = 0.1
+go
+
+exec dbo.usp_partner_registation
+	@username = 'partner_fruit',
+	@password = '123456789',
+	@name = N'Thức uống ngon',
+	@representative_name = N'Phạm Vĩnh Khang',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00001',
+	@address_line = N'1911 Đồng Chí',
+	@branch_number = 3,
+	@order_number = 100,
+	@product_type = 'FRUIT',
+	@phone = '0987654321',
+	@mail = 'partner@fruit.com';
+go
+
+exec dbo.usp_partner_register_contract
+	@CID = 'CID003',
+	@username = 'partner_fruit',
+	@TIN = '01234567890123456789',
+	@contract_time = 6,
+	@commission = 0.1
+go
+
+declare @number_contracts int
+exec dbo.usp_employee_accept_all_contracts @number_contracts_accepted = @number_contracts output
+
+select @number_contracts as N'Số lượng hợp đồng đã duyệt'
+
+insert into PRODUCTS(
+	PID,
+	username,
+	product_type,
+	name,
+	img_src,
+	price,
+	is_deleted,
+	description
+)
+values
+	('product1', 'partner_food', 'FOOD', N'Đùi tỏi gà', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/dui-toi-ga-khay-500g_azav2z.jpg', 47.000, 0, ''),
+	('product2', 'partner_food', 'FOOD', N'Cánh gà', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/canh-ga-khay-500g_zlg9sx.jpg', 48.500, 0, ''),
+	('product3', 'partner_food', 'FOOD', N'Chân gà', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964675/covid_app/products/chan-ga-khay-500g_wyixdk.jpg', 30.000, 0, ''),
+	('product4', 'partner_food', 'FOOD', N'Thịt heo xay', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964675/covid_app/products/thit-heo-xay-cp-khay-300g_qsh1pn.jpg', 34.500, 0, ''),
+	('product5', 'partner_food', 'FOOD', N'Thịt đùi heo', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964674/covid_app/products/thit-dui-heo-khay-300g_t3lcqq.jpg', 39.000, 0, ''),
+	('product6', 'partner_food', 'FOOD', N'Thịt ba rọi heo', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964675/covid_app/products/ba-roi-heo-khay-500g_tausuj.jpg', 88.000, 0, ''),
+	('product7', 'partner_food', 'FOOD', N'Thịt nạc vai heo', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964677/covid_app/products/nac-vai-heo-khay-300g_c94llc.jpg',  49.000, 0, ''),
+	('product8', 'partner_food', 'FOOD', N'Cá basa cắt khúc', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/ca-basa-cat-khuc-khay-500g_uz8sgb.jpg', 55.000, 0, ''),
+	('product9', 'partner_food', 'FOOD', N'Tôm thẻ', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/tom-the-nguyen-con-khay-300g_tvaydw.jpg', 60.000, 0, ''),
+	('product10', 'partner_food', 'FOOD', N'Rau muống', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964674/covid_app/products/rau-muong-tuoi-xanh-4kfarm-goi-500g_o51cfb.jpg', 9.000, 0, ''),
+	('product11', 'partner_food', 'FOOD', N'Cải ngọt', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964674/covid_app/products/rau-cai-ngot-4kfarm-goi-500g_grf6d4.jpg', 9.000, 0, ''),
+	('product12', 'partner_food', 'FOOD', N'Khoai tây', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964677/covid_app/products/khoai-tay-tui-500g_v5xpts.jpg', 12.500, 0, ''),
+	('product13', 'partner_food', 'FOOD', N'Cà rốt', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/ca-rot-da-lat-tui-500g_xlrzjp.jpg',  12.500, 0, ''),
+	('product14', 'partner_food', 'FOOD', N'Su su', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964674/covid_app/products/su-su-tui-500g_lyy8pw.jpg', 10.000, 0, ''),
+	('product15', 'partner_food', 'FOOD', N'Cà chua', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/ca-chua-tui-1kg_kfe1xi.jpg', 28.000, 0, ''),
+	('product16', 'partner_food', 'FOOD', N'Hành lá', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964676/covid_app/products/hanh-la-goi-100g_vgkclc.jpg', 6.000, 0, ''),
+	('product17', 'partner_food', 'FOOD', N'Ngò rí', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964674/covid_app/products/ngo-ri-goi-100g_g1hrd0.jpg', 6.000, 0, ''),
+	('product18', 'partner_food', 'FOOD', N'Tỏi bông sen', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964675/covid_app/products/toi-bong-sen-tui-100g_reqsqf.jpg', 6.900, 0, ''),
+	('product19', 'partner_food', 'FOOD', N'Hành tím', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964677/covid_app/products/hanh-tim-goi-300g_zlz8jz.jpg', 15.500, 0, ''),
+	('product20', 'partner_food', 'FOOD', N'Gừng', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964677/covid_app/products/gung-tui-100g_ccfayz.jpg',  6.500, 0, ''),
+	('product21', 'partner_food', 'FOOD', N'Hành tây', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964677/covid_app/products/hanh-tay-tui-300g_llx2z9.jpg',  12.000, 0, ''),
+	('product22', 'partner_food', 'FOOD', N'Ớt hiểm', N'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1647964675/covid_app/products/ot-hiem-trai-goi-50g_yqkwmk.jpg', 3.000, 0, ''),
+	('product23', 'partner_medical', 'MEDICAL', N'Nước rửa tay Lifebuoy 493ml', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226643/covid_app/products/nuoc-rua-tay-lifebuoy-bao-ve-vuot-troi-huong-tuoi-mat-chai-493ml_vkwhdx.jpg',  66.000, 0, ''),
+	('product24', 'partner_medical', 'MEDICAL', N'Gel rửa tay khô Green Cross hương tự nhiên chai 100ml', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226575/covid_app/products/gel-rua-tay-kho-green-cross-huong-tu-nhien-chai-100ml_vmbvqc.jpg',  36.000, 0, ''),
+	('product25', 'partner_medical', 'MEDICAL', N'Dung dịch rửa tay khô Green Cross hương tự nhiên chai 70ml', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226575/covid_app/products/xit-rua-tay-kho-green-cross-huong-tu-nhien-chai-70ml_vyicg5.jpg',  30.000, 0, ''),
+	('product26', 'partner_medical', 'MEDICAL', N'Dung dịch rửa tay khô Green Cross hương tự nhiên chai 250ml', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226576/covid_app/products/dung-dich-rua-tay-kho-green-cross-fresh-tuoi-mat-chai-250ml_sybqzn.jpg',  42.900, 0, ''),
+	('product27', 'partner_medical', 'MEDICAL', N'Khẩu trang y tế VMEDCARE 4 lớp hộp 50 cái', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226577/covid_app/products/khau-trang-y-te-vmedcare-4-lop-hop-50-cai_xtwudd.jpg',  59.000, 0, ''),
+	('product28', 'partner_medical', 'MEDICAL', N'Khẩu trang y tế Promask N95 5 lớp hộp 10 cái', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226576/covid_app/products/khau-trang-y-te-promask-n95-5-lop-hop-10-cai_wh8ldg.jpg',  165.000, 0, ''),
+	('product29', 'partner_drink', 'FRUIT', N'Quýt mini hộp 500g', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226576/covid_app/products/quyt-mini-tui-500g_yqm3sr.jpg',  22.500, 0, ''),
+	('product30', 'partner_drink', 'FRUIT', N'Cam sành túi 1kg', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226576/covid_app/products/cam-sanh-tui-1kg_ohokbs.jpg',  39.000, 0, ''),
+	('product31', 'partner_drink', 'FRUIT', N'Ổi Đài Loan vỉ 1kg', 'https://res.cloudinary.com/ngo-minh-phat/image/upload/v1648226629/covid_app/products/oi-dai-loan-tui-1kg-3-5-trai_m8b9cp.jpg',  21.000, 0, '')
+go
+
+-- tạo branch
+
+-- partner_food's branches 
+exec dbo.usp_partner_add_branch
+	@PBID = 'PBID001',
+	@username = 'partner_food',
+	@name = N'FOOD1 - Ngon',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00001',
+	@address_line = N'1 Hoàng Hà'
+go
+
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product1', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product2', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product3', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product4', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product5', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product6', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product7', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product8', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product9', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product10', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product11', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID001', 'product12', 100
+
+-- partner_food's branches 
+exec dbo.usp_partner_add_branch
+	@PBID = 'PBID002',
+	@username = 'partner_food',
+	@name = N'FOOD2 - Đỉnh',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00007',
+	@address_line = N'2 Trường Giang'
+go
+
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product13', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product14', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product15', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product16', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product17', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product18', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product19', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product20', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product21', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID002', 'product22', 100
+
+-- partner_food's branches 
+exec dbo.usp_partner_add_branch
+	@PBID = 'PBID003',
+	@username = 'partner_medical',
+	@name = N'FACKMARXY',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00001',
+	@address_line = N'2001 Ba Phát'
+go
+
+-- partner_food's branches 
+exec dbo.usp_partner_add_branch
+	@PBID = 'PBID005',
+	@username = 'partner_medical',
+	@name = N'Longue Chou',
+	@address_province_code = N'01',
+	@address_district_code = N'002',
+	@address_ward_code = N'00043',
+	@address_line = N'12/3e Ngô Minh Mạng'
+go
+
+exec dbo.usp_partner_add_product_to_branch 'PBID003', 'product23', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID003', 'product24', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID003', 'product25', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID003', 'product26', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID003', 'product27', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID003', 'product28', 100
+
+exec dbo.usp_partner_add_product_to_branch 'PBID005', 'product23', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID005', 'product24', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID005', 'product25', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID005', 'product26', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID005', 'product27', 100
+
+-- partner_food's branches 
+exec dbo.usp_partner_add_branch
+	@PBID = 'PBID004',
+	@username = 'partner_fruit',
+	@name = N'NATUARAL FRUIT',
+	@address_province_code = N'01',
+	@address_district_code = N'001',
+	@address_ward_code = N'00007',
+	@address_line = N'2001 Châu Châu'
+go
+
+exec dbo.usp_partner_add_product_to_branch 'PBID004', 'product29', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID004', 'product30', 100
+exec dbo.usp_partner_add_product_to_branch 'PBID004', 'product31', 100
+
+---- CUSTOMER
+exec dbo.usp_customer_registration
+	@username = 'customer1',
+	@password = '123456789',
+	@name = N'Khách hàng 1',
+	@address_province_code = N'87',
+	@address_district_code = N'876',
+	@address_ward_code = N'30211',
+	@address_line = N'319A, ấp Tân Lộc A',
+	@phone = '0704921215',
+	@mail = 'cus1@mail.com';
 go

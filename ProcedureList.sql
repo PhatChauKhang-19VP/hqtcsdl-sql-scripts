@@ -1,8 +1,8 @@
 ﻿use db_19vp_delivery
 go
 
-/* ___________________ APP USP ___________________ */
-create function dbo.fn_check_is_account_is_active(@username varchar(50))
+/*====================== APP ======================*/
+create or alter function dbo.fn_check_is_account_is_active(@username varchar(50))
 returns varchar(10)
 as
 begin	
@@ -13,8 +13,20 @@ begin
 	return 'False'
 end
 go
+
+create or alter function dbo.fn_check_is_account_is_pending(@username varchar(50))
+returns varchar(10)
+as
+begin	
+	if exists (select role from dbo.LOGIN_INFOS as li
+				where li.username=@username
+					and li.status = 'PENDING')
+		return 'True'
+	return 'False'
+end
+go
 	
-create function dbo.fn_app_log_in(@username varchar(50), @password varchar(128)) returns varchar(20)
+create or alter function dbo.fn_app_log_in(@username varchar(50), @password varchar(128)) returns varchar(20)
 as
 begin
 	if exists (select role from dbo.LOGIN_INFOS as li
@@ -26,12 +38,31 @@ begin
 end
 go
 
-/*========================= ĐỐI TÁC USP ==================*/
-select dbo.fn_app_log_in('partner1', '1')
+create or alter proc dbo.usp_get_provinces
+as begin
+	select p.code, p.name, p.full_name
+		from dbo.PROVINCES as p
+end
 go
 
+create or alter proc dbo.usp_get_districts
+as begin
+	select d.code, d.name, d.full_name, d.province_code
+		from dbo.DISTRICTS as d
+end
+go
+
+create or alter proc dbo.usp_get_wards
+as begin
+	select w.code, w.name, w.full_name, w.district_code
+		from dbo.WARDS as w
+end
+go
+
+/*========================= ĐỐI TÁC USP ==================*/
+
 -- đối tác đăng kí thông tin
-create proc dbo.usp_partner_registation
+create or alter proc dbo.usp_partner_registation
 	@username varchar(50),
 	@password varchar(128),
 	@name nvarchar(255),
@@ -71,7 +102,7 @@ end
 go
 
 -- đối tác lập/gia hạn hợp đồng
-create proc dbo.usp_partner_register_contract
+create or alter proc dbo.usp_partner_register_contract
 	@CID varchar(20),
 	@username varchar(50),
 	@TIN varchar(20),
@@ -121,7 +152,7 @@ end
 go
 
 -- đối tác lập/gia hạn hợp đồng with time
-create proc dbo.usp_partner_register_contract_with_start_time
+create or alter proc dbo.usp_partner_register_contract_with_start_time
 	@CID varchar(20),
 	@username varchar(50),
 	@TIN varchar(20),
@@ -168,7 +199,7 @@ end
 go
 
 -- đối tác xem hợp đồng hiện tại / hợp đồng đã được duyệt và chưa hết hạn
-create proc dbo.usp_partner_get_accepted_contracts
+create or alter proc dbo.usp_partner_get_accepted_contracts
 	@username varchar(50)
 as
 begin
@@ -184,7 +215,7 @@ end
 go
 
 -- đối tác xem hợp đồng đã hết hạn (gần nhất)
-create proc dbo.usp_partner_get_expired_contracts
+create or alter proc dbo.usp_partner_get_expired_contracts
 	@username varchar(50)
 as
 begin
@@ -197,8 +228,38 @@ begin
 end
 go
 
+-- đối tác xem chi nhánh
+create or alter proc dbo.usp_partner_get_branches
+	@partner_username varchar(50)
+as begin
+	begin try
+		begin tran
+			-- check if @partner_username exists
+			if not exists (select * 
+							from dbo.LOGIN_INFOS as li
+								join dbo.PARTNERS as pn on li.username = pn.username
+							where pn.username = @partner_username)
+				throw 52000, 'Invalid username !!!', 1
+
+			select pb.*, w.full_name, dt.full_name, pv.full_name
+				from dbo.PARTNER_BRANCHES as pb
+					join dbo.PROVINCES as pv on pb.address_province_code = pv.code
+					join dbo.DISTRICTS as dt on pb.address_district_code = dt.code
+					join dbo.WARDS as w on pb.address_ward_code = w.code		
+			commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
 -- đối tác thêm chi nhánh
-create proc dbo.usp_partner_add_branch
+create or alter proc dbo.usp_partner_add_branch
 	@PBID varchar(20),
 	@username varchar(50),
 	@name nvarchar(255),
@@ -209,7 +270,7 @@ create proc dbo.usp_partner_add_branch
 as begin
 	begin try
 		begin tran
-			if (select count(*) from dbo.PARTNER_BRANCHES where username = @username) < (select p.branch_number from dbo.PARTNERS as p where username = @username)
+			if (select count(*) from dbo.PARTNER_BRANCHES where username = @username and is_deleted = 0) < (select p.branch_number from dbo.PARTNERS as p where username = @username)
 				begin
 				insert into dbo.PARTNER_BRANCHES
 					values
@@ -232,10 +293,63 @@ as begin
 end
 go
 
+-- đối tác xóa chi nhánh
+create or alter proc dbo.usp_partner_delete_branch
+	@partner_username varchar(50),
+	@PBID varchar(20)
+as begin
+	begin try
+		begin tran
+			if not exists (select * from dbo.PARTNER_BRANCHES as pb where pb.username = @partner_username and pb.PBID = @PBID)
+				throw 52000, 'Partner branch do not exist. Cannot delete !!!', 1
+		
+		-- delete all product
+		update dbo.PRODUCT_IN_BRANCHES
+			set is_deleted = 1,
+				stock = 0
+			where PBID = @PBID
+
+		-- delete
+		update dbo.PARTNER_BRANCHES
+			set is_deleted = 1
+			where dbo.PARTNER_BRANCHES.username = @partner_username
+				and dbo.PARTNER_BRANCHES.PBID = @PBID
+		
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
+-- đối tác xem danh sách sản phẩm
+create or alter proc dbo.usp_partner_get_products
+	@partner_username varchar(50)
+as begin
+	begin try
+		begin tran
+			select * from PRODUCTS as p where p.username = @partner_username
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
 -- đối tác thêm sản phẩm
-create proc dbo.usp_partner_add_product
+create or alter proc dbo.usp_partner_add_product
 	@PID varchar(20),
-	@product_type varchar(255),
+	@product_type nvarchar(255),
 	@username varchar(50),
 	@img_src nvarchar(255),
 	@name nvarchar(255),
@@ -259,7 +373,7 @@ end
 go
 
 -- đối tác sửa thông tin sản phẩm
-create proc dbo.usp_partner_update_product
+create or alter proc dbo.usp_partner_update_product
 	@PID varchar(20),
 	@product_type nvarchar(255),
 	@username varchar(50),
@@ -292,7 +406,7 @@ end
 go
 
 -- đối tác xóa sản phẩm
-create proc dbo.usp_partner_delete_product
+create or alter proc dbo.usp_partner_delete_product
 	@PID varchar(20)
 as begin
 	begin try
@@ -318,8 +432,32 @@ as begin
 end
 go
 
+-- đối tác xem danh sách sản phẩm
+create or alter proc dbo.usp_partner_get_products_in_braches
+	@partner_username varchar(50)
+as begin
+	begin try
+		begin tran
+			select pb.*, pib.*, pd.*
+				from dbo.PRODUCTS as pd 
+					inner join dbo.PRODUCT_IN_BRANCHES as pib on pd.PID = pib.PID
+					inner join dbo.PARTNER_BRANCHES as pb on pd.username = pb.username and pib.PBID = pb.PBID
+				where pd.username = @partner_username
+				order by pb.PBID asc, pb.name asc
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
 -- đối tác thêm sản phẩm vào chi nhánh phân phối
-create proc dbo.usp_partner_add_product_to_branch
+create or alter proc dbo.usp_partner_add_product_to_branch
 	@PBID varchar(20),
 	@PID varchar(20),
 	@stock int
@@ -364,7 +502,7 @@ end
 go
 
 -- đối tác xóa sản phẩm khỏi chi nhánh phân phối
-create proc dbo.usp_partner_delete_product_from_branch
+create or alter proc dbo.usp_partner_delete_product_from_branch
 	@PBID varchar(20),
 	@PID varchar(20)
 as begin
@@ -385,18 +523,22 @@ end
 go
 
 -- đối tác xem đơn hàng của mình
-create proc dbo.usp_partner_get_orders
+create or alter proc dbo.usp_partner_get_orders
 	@partner_username varchar(50)
-as begins
-	select o.*, p.username 
+as begin
+	select o.*, p.username, c.name, c.address_line, w.full_name, dt.full_name, pv.full_name, w.code as w_code, dt.code as dt_code, pv.code as pv_code
 		from dbo.ORDERS as o
 			join dbo.PARTNERS as p on p.username = o.partner_username
+			join dbo.CUSTOMERS as c on o.customer_username = c.username
+			join dbo.PROVINCES as pv on c.address_province_code = pv.code
+			join dbo.DISTRICTS as dt on c.address_district_code = dt.code
+			join dbo.WARDS as w on c.address_ward_code = w.code
 		where p.username = @partner_username
 end
 go
 
 -- đối tác/tài xế cập nhật tình trạng vận chuyển đơn hàng
-create proc dbo.usp_partner_or_driver_update_delivery_status
+create or alter proc dbo.usp_partner_or_driver_update_delivery_status
 	@order_id varchar(20),
 	@new_delivery_status varchar(20)
 as begin
@@ -423,7 +565,7 @@ go
 go
 
 -- Đăng kí thành viên
-create proc dbo.usp_customer_registration
+create or alter proc dbo.usp_customer_registration
 	@username varchar(50),
 	@password varchar(512),
 	@name nvarchar(50),
@@ -445,8 +587,135 @@ go
 -- KHÁCH HÀNG ĐẶT HÀNG
 go
 
+create or alter proc usp_customer_get_partner
+as begin
+	select * from dbo.PARTNERS
+end
+go
+
+-- khach hang lay cac sp cua doi tac
+create or alter proc usp_customer_get_products
+	@partner_username varchar(50)
+as begin
+	select * from dbo.PRODUCTS as p where p.username = @partner_username 
+
+	select * from PARTNER_BRANCHES as pb where pb.username = @partner_username
+
+	select * from dbo.PRODUCT_IN_BRANCHES as pib
+		join dbo.PARTNER_BRANCHES as pb on pib.PBID = pb.PBID
+		where pb.is_deleted = 0 and pib.is_deleted = 0 and pb.username = @partner_username
+end
+go
+
+-- khách hàng thay đổi thông tin giỏ hàng
+create or alter proc dbo.usp_customer_change_cart_detail
+		@partner_username varchar(50),
+		@customer_username varchar(50),
+		@PID varchar(20),
+		@PBID varchar(20),
+		@quantity_change int
+as begin
+	begin try
+		begin tran
+			-- check if exists CART, if not create a new one
+			if not exists (select * from dbo.CARTS as ca where ca.partner_username = @partner_username and ca.customer_username = @customer_username)
+				begin
+					insert into dbo.CARTS (partner_username, customer_username, shipping_fee)
+						values(@partner_username, @customer_username, 10)
+				end
+			if not exists (select * 
+				from dbo.CARTS_DETAILS as cd 
+				where cd.partner_username = @partner_username 
+					and cd.customer_username = @customer_username
+					and cd.PID = @PID
+					and cd.PBID = @PBID)
+
+				begin
+					insert into dbo.CARTS_DETAILS (partner_username, customer_username, PID, PBID, quantity)
+						values (@partner_username, @customer_username, @PID, @PBID, @quantity_change)
+				end
+			else
+				begin
+					declare @old_qtt int = (select quantity from dbo.CARTS_DETAILS as cd where cd.partner_username = @partner_username  and cd.customer_username = @customer_username and cd.PID = @PID and cd.PBID = @PBID)
+					
+					update dbo.CARTS_DETAILS
+						set quantity = @old_qtt + @quantity_change
+						where partner_username = @partner_username  and customer_username = @customer_username and PID = @PID and PBID = @PBID
+				end
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+		select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+		raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+		if (@@TRANCOUNT > 0)
+			rollback tran
+	end catch
+end
+go
+
+-- khách hàng lấy thông tin giỏ hàng
+create or alter proc dbo.usp_customer_get_cart_details
+	@partner_username varchar(50),
+	@customer_username varchar(50)
+as begin
+	begin try
+		begin tran
+			-- select CART
+			select ct.*, c.*, w.full_name, dt.full_name, pv.full_name
+			from dbo.CARTS as ct
+				join dbo.CUSTOMERS as c on ct.customer_username = ct.customer_username
+				join dbo.PROVINCES as pv on c.address_province_code = pv.code
+				join dbo.DISTRICTS as dt on c.address_district_code = dt.code
+				join dbo.WARDS as w on c.address_ward_code = w.code
+			where ct.customer_username = @customer_username and ct.partner_username = @partner_username
+
+			-- select CART_DETAILS
+			select cd.*, p.name as p_name, p.img_src, pb.name as pb_name
+				from dbo.CARTS_DETAILS as cd
+					join dbo.PRODUCT_IN_BRANCHES as pib on cd.PBID = pib.PBID and cd.PID = pib.PID
+					join dbo.PARTNER_BRANCHES as pb on cd.PBID = pb.PBID
+					join dbo.PRODUCTS as p on cd.PID = p.PID
+				where cd.customer_username = @customer_username and cd.partner_username = @partner_username	commit tran
+		end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+		select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+		raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+		if (@@TRANCOUNT > 0)
+			rollback tran
+	end catch
+end
+go
+
+-- khách hàng lấy thông tin giỏ hàng
+create or alter proc dbo.usp_customer_delete_cart_details
+	@partner_username varchar(50),
+	@customer_username varchar(50)
+as begin
+	begin try
+		begin tran
+			-- delete CART_DETAILS
+			delete dbo.CARTS_DETAILS
+			where customer_username = @customer_username and partner_username = @partner_username	
+
+			-- delete CART
+			delete dbo.CARTS
+			where customer_username = @customer_username and partner_username = @partner_username		
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+		select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+		raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+		if (@@TRANCOUNT > 0)
+			rollback tran
+	end catch
+end
+go
+
 -- Khách hàng tạo đơn hàng
-create proc dbo.usp_customer_create_order
+create or alter proc dbo.usp_customer_create_order
 	@order_id varchar(20),
 	@partner_username varchar(50),
 	@customer_username varchar(50),
@@ -469,7 +738,7 @@ end
 go
 
 -- Thêm sản phẩm vào đơn hàng
-create proc dbo.usp_customer_add_product_to_order
+create or alter proc dbo.usp_customer_add_product_to_order
 	@order_id varchar(20),
 	@PID varchar(20),
 	@PBID varchar(20),
@@ -530,7 +799,7 @@ end
 go
 
 -- Bớt sản phẩm ra khỏi đơn hàng
-create proc dbo.usp_customer_remove_product_to_order
+create or alter proc dbo.usp_customer_remove_product_to_order
 	@order_id varchar(20),
 	@PID varchar(20),
 	@PBID varchar(20),
@@ -591,7 +860,7 @@ end
 go
 
 -- khách hàng thanh toán đơn hàng
-create proc dbo.usp_customer_pay_order
+create or alter proc dbo.usp_customer_pay_order
 	@order_id varchar(20)
 as begin
 	begin try
@@ -616,11 +885,42 @@ as begin
 	end catch
 end
 go
-	
+
+create or alter proc dbo.usp_user_get_order_details
+	@order_id varchar(20)
+as begin
+	begin try
+		begin tran
+			-- check if exist order
+			if not exists (select * from dbo.ORDERS	as o where o.order_id = @order_id)
+				throw 52000, 'Order not exist', 1
+
+			select o.*, p.name, c.address_line, w.full_name, dt.full_name, pv.full_name
+				from dbo.ORDERS as o
+					join dbo.PARTNERS as p on p.username = o.partner_username
+					join dbo.CUSTOMERS as c on o.customer_username = c.username
+					join dbo.PROVINCES as pv on c.address_province_code = pv.code
+					join dbo.DISTRICTS as dt on c.address_district_code = dt.code
+					join dbo.WARDS as w on c.address_ward_code = w.code
+				where o.order_id = @order_id
+
+			select * from dbo.ORDERS_DETAILS as od where od.order_id = @order_id
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
 /* ___________________ TÀI XẾ USP ___________________ */
 
 -- Tài xế đăng kí tài khoản
-create proc dbo.usp_driver_registration
+create or alter proc dbo.usp_driver_registration
 	@username varchar(50),
 	@password varchar(128),
 	@name nvarchar(50),
@@ -630,7 +930,7 @@ create proc dbo.usp_driver_registration
 	@address_ward_code nvarchar(20),
 	@address_line nvarchar(255),
 	@active_area_district_code nvarchar(20),
-	@mail varchar(50),
+	@mail varchar(255),
 	@BID varchar(20),
 	@bank_name nvarchar(255),
 	@bank_branch nvarchar(255),
@@ -668,7 +968,7 @@ end
 go
 
 -- Tài xế ~ đơn hàng trong khu vực đăng kí
-create proc dbo.usp_driver_get_orders_in_active_area
+create or alter proc dbo.usp_driver_get_orders_in_active_area
 	@username varchar(50)
 as
 begin
@@ -684,7 +984,7 @@ end
 go
 
 -- Tài xế tiếp nhận đơn hàng
-create proc dbo.usp_driver_receive_order
+create or alter proc dbo.usp_driver_receive_order
 	@username varchar(50),
 	@order_id varchar(20)
 as begin
@@ -728,7 +1028,7 @@ end
 go
 
 -- Tài xế theo dõi thu nhập
-create proc dbo.usp_driver_history_incomes
+create or alter proc dbo.usp_driver_history_incomes
 	@username varchar(50)
 as 
 begin
@@ -746,7 +1046,7 @@ go
 /* ___________________ NHÂN VIÊN USP ___________________ */
 
 -- Nhân viên xem danh sách hợp đồng của đối tác
-create proc dbo.usp_employee_get_contracts
+create or alter proc dbo.usp_employee_get_contracts
 	@contract_status varchar(20)
 as begin
 	begin try
@@ -766,7 +1066,7 @@ end
 go
 
 -- Nhân viên duyệt tất cả hợp đồng -> trả về số lượng hợp đồng đã duyệt
-create proc dbo.usp_employee_accept_all_contracts
+create or alter proc dbo.usp_employee_accept_all_contracts
 @number_contracts_accepted int output
 as begin
 	begin try
@@ -797,12 +1097,18 @@ end
 go
  
 -- Nhân viên duyệt 1 hợp đồng
-create proc dbo.usp_employee_accept_contract
+create  or alter proc dbo.usp_employee_accept_contract
 	@CID varchar(20)
 as begin
 	begin try
 		begin tran
-			-- todo
+			-- check if CID is valid
+			if not exists (select * from dbo.CONTRACTS as c where c.CID = @CID)
+				throw 52000, 'Invalid CID !!!', 1
+			
+			update dbo.CONTRACTS
+				set status = 'ACCEPTED'
+				where CID = @CID
 		commit tran
 	end try
 	begin catch
@@ -815,8 +1121,35 @@ as begin
 end
 go
 
--- Nhân viên duyệt đăng kí tài khoảng 1 partner
-create proc dbo.usp_employee_active_partner_account
+-- Nhân viên từ chối hợp đồng
+create or alter proc dbo.usp_employee_reject_contract
+	@CID varchar(20)
+as begin
+	begin try
+		begin tran
+			-- check if CID is valid
+			if not exists (select * from dbo.CONTRACTS as c where c.CID = @CID)
+				throw 52000, 'Invalid CID !!!', 1
+			
+			update dbo.CONTRACTS
+				set status = 'REJECTED'
+				where CID = @CID
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
+-- Nhân viên xem danh sách đăng kí DRIVER
+
+-- Nhân viên CHẤP NHẬN đăng kí tài khoảng 1 partner
+create or alter proc dbo.usp_employee_accept_partner_registration
 	@partner_username varchar(50)
 as begin
 	begin try
@@ -857,8 +1190,50 @@ as begin
 end
 go
 
--- Nhân viên kích hoạt 1 tài khoảng tài xế
-create proc dbo.usp_employee_active_driver_account
+-- Nhân viên TỪ CHỐI đăng kí tài khoảng 1 partner
+create or alter proc dbo.usp_employee_reject_partner_registration
+	@partner_username varchar(50)
+as begin
+	begin try
+		begin tran
+			-- check if valid partner's username
+			if not exists (select * 
+						from dbo.LOGIN_INFOS as li
+							join dbo.PARTNERS as p on li.username = p.username
+							join dbo.PARTNER_REGISTRATIONS as pr on li.username = pr.username
+						where li.username = @partner_username 
+							and pr.status = 'PENDING' 
+							and li.status = 'PENDING' 
+							and li.role = 'PARTNER')
+				throw 52000, 'Invalid username !!!', 1
+			else 
+				begin
+					-- approve partner registration
+					update dbo.PARTNER_REGISTRATIONS
+						set status = 'REJECTED'
+						where username = @partner_username
+					
+					-- change LOGIN_INFOS status from `PENDING` to `INACTIVE`
+					update dbo.LOGIN_INFOS
+						set status = 'INACTIVE'
+						where username = @partner_username
+				end
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select 
+        @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (
+        @ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
+-- Nhân viên CHẤP NHẬN đang kí tài khoảng tài xế
+create or alter proc dbo.usp_employee_accept_driver_registration
 	@driver_username varchar(50)
 as begin
 	begin try
@@ -899,8 +1274,51 @@ as begin
 end
 go
 
+
+-- Nhân viên CHẤP NHẬN đang kí tài khoảng tài xế
+create or alter proc dbo.usp_employee_reject_driver_registration
+	@driver_username varchar(50)
+as begin
+	begin try
+		begin tran
+			-- check if valid partner's username
+			if not exists (select * 
+						from dbo.LOGIN_INFOS as li
+							join dbo.DRIVERS as p on li.username = p.username
+							join dbo.DRIVER_REGISTRATIONS as dr on li.username = dr.username
+						where li.username = @driver_username 
+							and dr.registration_status = 'PENDING'
+							and li.status = 'PENDING' 
+							and li.role = 'DRIVER')
+				throw 52000, 'Invalid username !!!', 1
+			else 
+				begin
+					-- approve partner registration
+					update dbo.DRIVER_REGISTRATIONS
+						set registration_status = 'REJECTED'
+						where username = @driver_username
+					
+					-- change LOGIN_INFOS status from `PENDING` to `INACTIVE`
+					update dbo.LOGIN_INFOS
+						set status = 'INACTIVE'
+						where username = @driver_username
+				end
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select 
+        @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (
+        @ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
+
 -- Nhân viên kích hoạt toàn bộ tài khoảng tài xế, trả về số lượng
-create proc dbo.usp_employee_active_all_driver_accounts
+create or alter proc dbo.usp_employee_active_all_driver_accounts
 	@number_of_driver_account int output
 as begin
 	begin try
@@ -948,13 +1366,40 @@ as begin
 end
 go
 
+
+-- Nhân viên lấy danh sách
 /* ___________________ QUẢN TRỊ USP ___________________ */
 go
 
 /* ----- quản trị người dùng ----- */
+go
+
+-- Admin lấy danh sách tài khoảng
+create or alter proc dbo.usp_admin_get_accounts
+	@account_role varchar(20) = 'ALL'
+as begin
+	begin try
+		begin tran
+			if (@account_role not in ('ALL', 'ADMIN', 'MANAGER', 'PARTNER', 'DRIVER', 'EMPLOYEE'))
+				throw 52000, 'Invalid account_role !!!', 1
+			if @account_role = 'ALL'
+				select * from LOGIN_INFOS as li order by li.role asc
+			else
+				select * from LOGIN_INFOS as li where li.role = @account_role order by li.role asc
+		commit tran
+	end try
+	begin catch
+		declare @ErrorMessage nvarchar(4000), @ErrorSeverity int, @ErrorState int;
+    select @ErrorMessage = ERROR_MESSAGE(), @ErrorSeverity = ERROR_SEVERITY(), @ErrorState = ERROR_STATE();
+    raiserror (@ErrorMessage, @ErrorSeverity, @ErrorState);
+	if (@@TRANCOUNT > 0)
+		rollback tran
+	end catch
+end
+go
 
 -- Admin thêm tài khoản Admin
-create proc dbo.usp_admin_add_admin_account
+create or alter proc dbo.usp_admin_add_admin_account
 	@username varchar(50),
 	@password varchar(128),
 	@name nvarchar(255)
@@ -978,7 +1423,7 @@ end
 go
 
 -- Admin xóa tài khoảng admin
-create proc dbo.usp_admin_delete_admin_account
+create or alter proc dbo.usp_admin_delete_admin_account
 	@username_to_delete varchar(50)
 as begin
 	begin try
@@ -1011,7 +1456,7 @@ end
 go
 
 -- Admin thêm tài khoản nhân viên
-create proc dbo.usp_admin_add_employee_account
+create or alter proc dbo.usp_admin_add_employee_account
 	@username varchar(50),
 	@password varchar(512),
 	@name nvarchar(50),
@@ -1036,7 +1481,7 @@ end
 go
 
 -- Admin xóa tài khoảng nhân viên
-create proc dbo.usp_admin_delete_employee_account
+create or alter proc dbo.usp_admin_delete_employee_account
 	@username_to_delete varchar(50)
 as begin
 	begin try
@@ -1069,7 +1514,7 @@ end
 go
 
 -- ADMIN khóa/kích hoạt tài khoản
-create proc dbo.usp_admin_change_account_status
+create or alter proc dbo.usp_admin_change_account_status
 	@username_to_change varchar(50),
 	@new_status varchar(20)
 as begin
@@ -1093,3 +1538,4 @@ as begin
 	end catch
 end
 go
+

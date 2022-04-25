@@ -33,7 +33,7 @@ go
 -- test đối tác lập hợp đồng
 exec dbo.usp_partner_register_contract
 	@CID = 'CID003',
-	@username = 'phatnm.partner1',
+	@username = 'partner1.phatnm',
 	@TIN = '01234567890123456789',
 	@contract_time = 6,
 	@commission = 0.7
@@ -50,6 +50,10 @@ go
 
 -- đối tác xem hợp đồng hết hạn MÀ CHƯA ĐƯỢC GIA HẠN
 exec dbo.usp_partner_get_expired_contracts 'phatnm.partner1'
+go
+
+-- đối tác xem hợp đồng được chấp nhận
+exec dbo.usp_partner_get_accepted_contracts 'phatnm.partner1'
 go
 
 -- test đối tác thêm chi nhánh
@@ -88,6 +92,10 @@ exec dbo.usp_partner_add_branch
 	@address_district_code = N'002',
 	@address_ward_code = N'00040',
 	@address_line = N'123 nhà vàng 00040'
+go
+
+
+exec dbo.usp_partner_get_branches 'phatnm.partner1'
 go
 
 -- test đối tác thêm sản phẩm
@@ -165,6 +173,10 @@ go
 	@customer_username varchar(50),
 	@payment_method varchar(20) -- CASH, MOMO, ZALOPAY
 */
+
+exec usp_customer_change_cart_detail 'partner_food', 'customer1', 'product1', 'PBID001', 2
+go
+
 exec dbo.usp_customer_create_order 'ORDER001', 'phatnm.partner1', 'phatnm.customer2', 'CASH'
 go
 exec dbo.usp_customer_create_order 'ORDER002', 'phatnm.partner1', 'phatnm.customer2', 'CASH'
@@ -174,6 +186,10 @@ exec dbo.usp_customer_add_product_to_order 'ORDER001', 'PID001', 'PBID001', 10
 go
 exec dbo.usp_customer_remove_product_to_order 'ORDER001', 'PID001', 'PBID001', 2
 go 
+exec dbo.usp_customer_add_product_to_order 'ORDER001', 'PID003', 'PBID001', 20
+go
+exec dbo.usp_customer_remove_product_to_order 'ORDER001', 'PID003', 'PBID001', 2
+go
 
 -- khách hàng thanh toán đơn hàng 
 exec dbo.usp_customer_pay_order 'ORDER001'
@@ -186,6 +202,9 @@ go
 
 -- đối tác xem đơn hàng của mình
 exec as user = '_partner'
+go
+
+exec dbo.usp_user_get_order_details 'ORDER001'
 go
 
 exec dbo.usp_partner_get_orders 'phatnm.partner1'
